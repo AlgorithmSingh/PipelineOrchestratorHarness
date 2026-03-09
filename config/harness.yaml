@@ -1,0 +1,76 @@
+project:
+  name: "pipeline-orchestrator-harness"
+  root: "."
+  worktreeDir: ".harness/worktrees"
+  stateDir: ".harness/state"
+  logDir: ".harness/logs"
+  canonicalBranch: "main"
+
+pipelines:
+  planGeneration:
+    enabled: false
+    runtime: "claude-code"
+    model: "opus"
+
+  execution:
+    enabled: true
+    maxParallelAgents: 3
+    pollIntervalMs: 30000
+    maxRetriesPerTicket: 3
+    runtime: "claude-code"
+    fallbackRuntime: "codex"
+    maxRetriesBeforeFallback: 2
+    mergeMode: "direct"
+    checks:
+      - name: "TypeScript"
+        command: "npm run typecheck"
+      - name: "Lint"
+        command: "npm run lint"
+    worktreeSetup:
+      - "npm install"
+    planner:
+      runtime: "claude-code"
+      maxTurns: 20
+      maxBudgetUsd: 2
+    coder:
+      runtime: "claude-code"
+      maxTurns: 50
+      maxBudgetUsd: 5
+    reviewer:
+      runtime: "claude-code"
+      maxTurns: 15
+      maxBudgetUsd: 1
+
+  adversarial:
+    enabled: false
+    pollIntervalMs: 60000
+    maxParallelTargets: 2
+    targetStrategy: "recent"
+    targetsPerRun: 5
+    bugFinder:
+      runtime: "codex"
+      aggressiveness: 0.8
+      maxTurns: 30
+      maxBudgetUsd: 3
+    adversarialRefuter:
+      runtime: "claude-code"
+      maxTurns: 10
+      maxBudgetUsd: 1
+    referee:
+      runtime: "claude-code"
+      model: "haiku"
+      maxTurns: 5
+      maxBudgetUsd: 0.5
+
+runtimes:
+  claude-code:
+    type: "claude-code"
+  codex:
+    type: "codex"
+    approvalPolicy: "never"
+    sandbox: "workspace-write"
+
+hitl:
+  notifyMethod: "terminal"
+  webhookUrl: ""
+  timeoutMinutes: 1440

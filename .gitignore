@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.harness/
+coverage/
+config/harness.local.yaml
+*.log
+.DS_Store
