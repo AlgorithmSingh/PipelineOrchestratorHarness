@@ -7,7 +7,7 @@ export class CodexRuntime implements AgentRuntime {
   async execute(prompt: string, config: AgentRuntimeConfig): Promise<AgentResult> {
     const started = Date.now();
     try {
-      const { stdout } = await execa(
+      const result = await execa(
         "codex",
         ["exec", "--full-auto", "--sandbox", "workspace-write", prompt],
         {
@@ -17,19 +17,34 @@ export class CodexRuntime implements AgentRuntime {
         },
       );
 
+      const rawOutput = result.stdout ?? "";
       let output: Record<string, unknown> = {};
       try {
-        output = JSON.parse(stdout) as Record<string, unknown>;
+        output = JSON.parse(rawOutput) as Record<string, unknown>;
       } catch {
-        output = { text: stdout };
+        output = { text: rawOutput };
       }
 
+      if (result.signal) {
+        return {
+          passed: false,
+          output,
+          rawOutput,
+          tokenUsage: { inputTokens: 0, outputTokens: 0 },
+          exitReason: "aborted",
+          error: `Process killed by signal: ${result.signal}`,
+          durationMs: Date.now() - started,
+        };
+      }
+
+      const passed = result.exitCode === 0;
       return {
-        passed: true,
+        passed,
         output,
-        rawOutput: stdout,
+        rawOutput,
         tokenUsage: { inputTokens: 0, outputTokens: 0 },
-        exitReason: "completed",
+        exitReason: passed ? "completed" : "error",
+        error: passed ? undefined : (result.stderr?.trim() || `Exit code ${result.exitCode}`),
         durationMs: Date.now() - started,
       };
     } catch (error) {

@@ -83,17 +83,26 @@ program
   .option("--beads-database <database>", "Use an existing Dolt server database for Beads init")
   .option("--beads-server-host <host>", "Beads Dolt server host override")
   .option("--beads-server-port <port>", "Beads Dolt server port override")
+  .option("--project-type <node|python>", "Project type for capability detection")
+  .option("--check <name=command>", "Override detected checks (repeatable)", (value, prev: string[]) => {
+    prev.push(value);
+    return prev;
+  }, [])
   .action(async (path: string, options: {
     beadsPrefix?: string;
     beadsDatabase?: string;
     beadsServerHost?: string;
     beadsServerPort?: string;
+    projectType?: "node" | "python";
+    check: string[];
   }) => {
     await initProject(path, {
       beadsPrefix: options.beadsPrefix,
       beadsDatabase: options.beadsDatabase,
       beadsServerHost: options.beadsServerHost,
       beadsServerPort: options.beadsServerPort ? Number(options.beadsServerPort) : undefined,
+      projectType: options.projectType,
+      checks: options.check,
     });
   });
 

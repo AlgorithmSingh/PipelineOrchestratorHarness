@@ -1,6 +1,7 @@
 import { execa } from "execa";
 import type { Logger } from "pino";
 import type { HarnessConfig } from "../types.js";
+import { validateExecutionReadiness } from "../config.js";
 import { PipelineError } from "../errors.js";
 import { createBeadsClient } from "../beads/client.js";
 import type { Ticket } from "../beads/types.js";
@@ -15,6 +16,80 @@ import { executionTransitions } from "../state/transitions.js";
 import type { ExecutionState, StateContext } from "../state/types.js";
 import { buildCoderPrompt, buildFailureContext, buildPlannerPrompt, buildReviewerPrompt } from "../contracts/generator.js";
 import { HITLGate } from "../hitl/gate.js";
+
+export type ReviewerVerdictParseResult =
+  | { valid: true; verdict: "pass" | "fail"; parsed: Record<string, unknown> }
+  | { valid: false; reason: "no_json_found" | "json_parse_error" | "missing_verdict_field" | "invalid_verdict_value" };
+
+export function parseReviewerVerdict(rawOutput: string): ReviewerVerdictParseResult {
+  const stripFences = (input: string): string => {
+    const fenced = input.match(/```(?:json)?\s*([\s\S]*?)```/m);
+    if (fenced && fenced[1]) return fenced[1];
+    return input;
+  };
+
+  const candidateSource = stripFences(rawOutput ?? "").trim();
+  const start = candidateSource.indexOf("{");
+  if (start === -1) {
+    return { valid: false, reason: "no_json_found" };
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let end = -1;
+  for (let i = start; i < candidateSource.length; i++) {
+    const ch = candidateSource[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === "{") depth += 1;
+    if (ch === "}") depth -= 1;
+    if (depth === 0) {
+      end = i;
+      break;
+    }
+  }
+
+  if (end === -1) {
+    return { valid: false, reason: "json_parse_error" };
+  }
+
+  const jsonText = candidateSource.slice(start, end + 1);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText) as Record<string, unknown>;
+  } catch {
+    return { valid: false, reason: "json_parse_error" };
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    return { valid: false, reason: "json_parse_error" };
+  }
+
+  const verdict = (parsed as Record<string, unknown>).verdict;
+  if (verdict === undefined) {
+    return { valid: false, reason: "missing_verdict_field" };
+  }
+  if (typeof verdict !== "string") {
+    return { valid: false, reason: "invalid_verdict_value" };
+  }
+  if (verdict !== "pass" && verdict !== "fail") {
+    return { valid: false, reason: "invalid_verdict_value" };
+  }
+
+  return { valid: true, verdict, parsed: parsed as Record<string, unknown> };
+}
 
 export class ExecutionPipeline {
   private readonly beads;
@@ -50,6 +125,7 @@ export class ExecutionPipeline {
 
   async runOnce(signal?: AbortSignal): Promise<void> {
     const log = this.logger.child({ pipeline: "execution" });
+    validateExecutionReadiness(this.config);
     const beadsAvailable = await this.beads.healthCheck();
     if (!beadsAvailable) {
       throw new PipelineError(
@@ -232,6 +308,19 @@ export class ExecutionPipeline {
             return;
           }
 
+          if (coderResult.exitReason !== "completed" || coderResult.passed === false) {
+            await machine.replaceContext((c) => ({
+              ...c,
+              agentResult: coderResult,
+              retryCount: c.retryCount + 1,
+              failureType: "coder_runtime_failure",
+              failureReason: coderResult.exitReason,
+              failureContext: buildFailureContext(undefined, undefined, coderResult.error ?? coderResult.exitReason),
+            }));
+            await machine.transition("exec:cascade_check");
+            break;
+          }
+
           await machine.replaceContext((c) => ({ ...c, agentResult: coderResult }));
           await machine.transition("exec:deterministic_checks");
           break;
@@ -294,28 +383,47 @@ export class ExecutionPipeline {
             return;
           }
 
-          // Parse verdict
-          let passed = true;
-          try {
-            const verdict = JSON.parse(reviewResult.rawOutput) as { verdict: string };
-            passed = verdict.verdict === "pass";
-          } catch {
-            // If we can't parse, default to pass (let deterministic checks be the gate)
-            passed = true;
+          if (reviewResult.exitReason !== "completed" || reviewResult.passed === false) {
+            await machine.replaceContext((c) => ({
+              ...c,
+              agentResult: reviewResult,
+              retryCount: c.retryCount + 1,
+              failureType: "reviewer_runtime_failure",
+              failureReason: reviewResult.exitReason,
+              failureContext: buildFailureContext(undefined, undefined, reviewResult.error ?? reviewResult.exitReason),
+            }));
+            await machine.transition("exec:cascade_check");
+            break;
           }
 
+          const verdict = parseReviewerVerdict(reviewResult.rawOutput);
           await machine.replaceContext((c) => ({
             ...c,
-            agentResult: { ...reviewResult, passed },
+            agentResult: { ...reviewResult, passed: verdict.valid && verdict.verdict === "pass" },
             reviewOutput: reviewResult.rawOutput,
           }));
 
-          if (passed) {
+          if (!verdict.valid) {
+            await machine.replaceContext((c) => ({
+              ...c,
+              retryCount: c.retryCount + 1,
+              checksPassed: false,
+              failureType: "reviewer_output_invalid",
+              failureReason: verdict.reason,
+              failureContext: `${buildFailureContext(undefined, reviewResult.rawOutput)}\n\nReviewer verdict parse failure: ${verdict.reason}`,
+            }));
+            await machine.transition("exec:cascade_check");
+            break;
+          }
+
+          if (verdict.verdict === "pass") {
             await machine.transition("exec:commit");
           } else {
             await machine.replaceContext((c) => ({
               ...c,
               retryCount: c.retryCount + 1,
+              failureType: "reviewer_rejected",
+              failureReason: "fail",
               failureContext: buildFailureContext(undefined, reviewResult.rawOutput),
             }));
             await machine.transition("exec:cascade_check");

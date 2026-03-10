@@ -51,6 +51,8 @@ export interface StateContext {
   reviewOutput?: string;
   mergeConflict?: boolean;
   mergeMode?: string;
+  failureType?: string;
+  failureReason?: string;
   bugReports?: Array<Record<string, unknown>>;
   currentBugIndex?: number;
   operationFlags?: Record<string, boolean>;

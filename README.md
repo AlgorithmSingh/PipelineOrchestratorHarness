@@ -204,10 +204,37 @@ Phase E — Full Execution Pipeline
 src/pipelines/execution.ts — State-machine-driven processTicket() with planner → coder → checks → reviewer → commit → merge → close, with cascade/reinject/HITL on failure
 Now you can do:
 
-
-harness init /path/to/project     # sets up everything
+npx harness init /path/to/project     # sets up everything
 # create tickets with bd
-harness start --project /path/to/project --pipeline execution
+npx harness start --project /path/to/project --pipeline execution
+
+npx harness init /Users/ankitsingh/Documents/dev/HARNESS/todolist9
+npx harness start --project /Users/ankitsingh/Documents/dev/HARNESS/todolist9 --pipeline execution
+npx harness init /Users/ankitsingh/Documents/dev/HARNESS/todolist11 \
+  --check "Typecheck=npm run typecheck" \
+  --check "Lint=npm run lint" \
+  --check "Tests=npm test"
+
+### UI Modes
+
+`harness start` now supports `--ui auto|dashboard|logs`:
+
+- `auto` (default): uses interactive dashboard when running in a TTY, otherwise falls back to logs.
+- `dashboard`: forces interactive tree UI (falls back to logs on non-TTY).
+- `logs`: classic log output only.
+
+In dashboard mode:
+
+- Queue progress is shown per pipeline (`ready/running/completed/failed/pending`).
+- Execution tickets show stage checklist progress and expandable agent activity nodes.
+- Full NDJSON logs are written to `.harness/logs/harness-<timestamp>.ndjson`.
+- Keyboard:
+  - `up/down`: move selection
+  - `enter`: toggle expand/collapse
+  - `left/right`: collapse/expand selected node
+  - `e`: expand all
+  - `c`: collapse all
+  - `Ctrl+C`: stop
 
 ps aux | grep claude
 

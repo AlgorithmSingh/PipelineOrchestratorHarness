@@ -85,7 +85,7 @@ function deepMerge<T>(base: T, patch: unknown): T {
   return result as T;
 }
 
-function validateConfig(config: HarnessConfig, configPath: string): void {
+function validateStructuralConfig(config: HarnessConfig, configPath: string): void {
   if (config.project.name.trim().length === 0) {
     throw new ConfigError("project.name cannot be empty", {
       configPath,
@@ -109,6 +109,56 @@ function validateConfig(config: HarnessConfig, configPath: string): void {
       configPath,
       field: "hitl.timeoutMinutes",
     });
+  }
+}
+
+function checksExampleSnippet(): string {
+  return [
+    "pipelines:",
+    "  execution:",
+    "    checks:",
+    "      - name: Tests",
+    "        command: npm test",
+  ].join("\n");
+}
+
+function missingChecksMessage(): string {
+  return [
+    "pipelines.execution.checks is empty. The execution pipeline requires at least one",
+    "deterministic check to run.",
+    "",
+    "Previously, empty checks were allowed. To fix this, either:",
+    "",
+    "1. Add checks to .harness/config.yaml:",
+    "   pipelines:",
+    "     execution:",
+    "       checks:",
+    "         - name: Tests",
+    "           command: npm test",
+    "",
+    "2. Re-initialize with capability detection:",
+    "   harness init <path> --project-type node",
+  ].join("\n");
+}
+
+export function validateExecutionReadiness(config: HarnessConfig): void {
+  const execConfig = config.pipelines.execution;
+  if (!execConfig.enabled) return;
+
+  const checks = execConfig.checks;
+  if (!Array.isArray(checks) || checks.length === 0) {
+    throw new ConfigError(missingChecksMessage(), { field: "pipelines.execution.checks" });
+  }
+
+  for (const [index, check] of checks.entries()) {
+    const name = check?.name?.trim?.() ?? "";
+    const command = check?.command?.trim?.() ?? "";
+    if (name.length === 0 || command.length === 0) {
+      throw new ConfigError(
+        `Check entry ${index + 1} must have non-empty name and command.\n\nExample:\n${checksExampleSnippet()}`,
+        { field: `pipelines.execution.checks[${index}]` },
+      );
+    }
   }
 }
 
@@ -156,7 +206,7 @@ export async function loadConfig(harnessRoot = process.cwd(), targetProject?: st
     },
   });
 
-  validateConfig(merged, configPath);
+  validateStructuralConfig(merged, configPath);
 
   await Promise.all([
     mkdir(merged.project.worktreeDir, { recursive: true }),

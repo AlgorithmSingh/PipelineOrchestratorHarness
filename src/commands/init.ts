@@ -3,12 +3,15 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import { execa } from "execa";
 import { stringify } from "yaml";
+import type { CheckCommand } from "../types.js";
 
 export interface InitProjectOptions {
   beadsPrefix?: string;
   beadsDatabase?: string;
   beadsServerHost?: string;
   beadsServerPort?: number;
+  projectType?: "node" | "python";
+  checks?: string[];
 }
 
 function normalizePrefix(value: string): string {
@@ -69,6 +72,175 @@ function pushUniqueServer(
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return;
   if (list.some((entry) => entry.host === host && entry.port === port)) return;
   list.push({ host, port });
+}
+
+function parseCheckFlag(value: string): CheckCommand {
+  const raw = value.trim();
+  const [rawName = "", ...rest] = raw.split("=");
+  if (rest.length === 0) {
+    throw new Error(`Invalid --check value '${value}'. Use the form Name=command.`);
+  }
+  const name = rawName.trim();
+  const command = rest.join("=").trim();
+  if (!name) {
+    throw new Error(`Invalid --check value '${value}': name is empty.`);
+  }
+  if (!command) {
+    throw new Error(`Invalid --check value '${value}': command is empty.`);
+  }
+  return { name, command };
+}
+
+type CapabilityDetectionResult = { checks: CheckCommand[]; log: string[] };
+type CapabilityDetector = (projectRoot: string) => Promise<CapabilityDetectionResult>;
+
+async function readFileIfExists(path: string): Promise<string | null> {
+  if (!existsSync(path)) return null;
+  return readFile(path, "utf8");
+}
+
+async function detectNodeChecks(projectRoot: string): Promise<CapabilityDetectionResult> {
+  const pkgPath = `${projectRoot}/package.json`;
+  if (!existsSync(pkgPath)) {
+    throw new Error(
+      [
+        "No usable check commands detected in package.json scripts.",
+        "Looked for: test, typecheck, lint",
+        "Either add scripts to package.json or pass --check explicitly:",
+        "  harness init <path> --project-type node --check \"Tests=npm test\"",
+      ].join("\n"),
+    );
+  }
+
+  let scripts: Record<string, string> = {};
+  try {
+    const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { scripts?: Record<string, string> };
+    scripts = pkg.scripts ?? {};
+  } catch (error) {
+    throw new Error(`Failed to parse package.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const checks: CheckCommand[] = [];
+  const log: string[] = [];
+
+  if (scripts.typecheck) {
+    checks.push({ name: "Typecheck", command: "npm run typecheck" });
+    log.push("Detected typecheck script -> Typecheck: npm run typecheck");
+  }
+  if (scripts.lint) {
+    checks.push({ name: "Lint", command: "npm run lint" });
+    log.push("Detected lint script -> Lint: npm run lint");
+  }
+  if (scripts.test) {
+    const testScript = scripts.test.trim();
+    const defaultStub = /^echo\s+\"?Error:\s+no\s+test\s+specified\"?\s+&&\s+exit\s+1$/i;
+    if (!defaultStub.test(testScript)) {
+      checks.push({ name: "Tests", command: "npm test" });
+      log.push("Detected test script -> Tests: npm test");
+    } else {
+      log.push("Skipped default npm test stub");
+    }
+  }
+
+  if (checks.length === 0) {
+    throw new Error(
+      [
+        "No usable check commands detected in package.json scripts.",
+        "Looked for: test, typecheck, lint",
+        "Either add scripts to package.json or pass --check explicitly:",
+        "  harness init <path> --project-type node --check \"Tests=npm test\"",
+      ].join("\n"),
+    );
+  }
+
+  return { checks, log };
+}
+
+function containsRequirement(text: string | null, name: string): boolean {
+  if (!text) return false;
+  const pattern = new RegExp(`(^|\\n)\\s*${name}(\\b|==|>=|<=|~=|\\s)`, "i");
+  return pattern.test(text);
+}
+
+async function detectPythonChecks(projectRoot: string): Promise<CapabilityDetectionResult> {
+  const pyproject = await readFileIfExists(`${projectRoot}/pyproject.toml`);
+  const setupCfg = await readFileIfExists(`${projectRoot}/setup.cfg`);
+  const toxIni = existsSync(`${projectRoot}/tox.ini`);
+  const requirementsFiles = [
+    await readFileIfExists(`${projectRoot}/requirements.txt`),
+    await readFileIfExists(`${projectRoot}/requirements-dev.txt`),
+    await readFileIfExists(`${projectRoot}/dev-requirements.txt`),
+  ].filter(Boolean) as string[];
+  const requirementsCombined = requirementsFiles.join("\n");
+
+  const checks: CheckCommand[] = [];
+  const log: string[] = [];
+
+  const hasMypy = (pyproject?.includes("[tool.mypy]") ?? false)
+    || (setupCfg?.match(/\[mypy\]/i) ? true : false)
+    || containsRequirement(requirementsCombined, "mypy");
+  if (hasMypy) {
+    checks.push({ name: "Typecheck", command: "python -m mypy ." });
+    log.push("Detected mypy config/dependency -> Typecheck: python -m mypy .");
+  }
+
+  const hasRuff = (pyproject?.includes("[tool.ruff]") ?? false)
+    || containsRequirement(requirementsCombined, "ruff");
+  if (hasRuff) {
+    checks.push({ name: "Lint", command: "ruff check ." });
+    log.push("Detected ruff config/dependency -> Lint: ruff check .");
+  }
+
+  const testsDirExists = existsSync(`${projectRoot}/tests`);
+  const hasPytestConfig = (pyproject?.includes("[tool.pytest.ini_options]") ?? false)
+    || containsRequirement(requirementsCombined, "pytest")
+    || (setupCfg?.match(/\[tool:pytest\]/i) ? true : false);
+  if (hasPytestConfig || testsDirExists) {
+    checks.push({ name: "Tests", command: "python -m pytest" });
+    log.push("Detected pytest signals -> Tests: python -m pytest");
+  }
+
+  if (toxIni) {
+    checks.push({ name: "Tests (tox)", command: "tox" });
+    log.push("Detected tox.ini -> Tests (tox): tox");
+  }
+
+  if (checks.length === 0) {
+    throw new Error(
+      [
+        "No usable check commands detected for python project.",
+        "Looked for: mypy config or dependency, ruff config or dependency, pytest config/dependency/tests/, tox.ini",
+        "Either add tooling or pass --check explicitly:",
+        "  harness init <path> --project-type python --check \"Tests=python -m pytest\"",
+      ].join("\n"),
+    );
+  }
+
+  return { checks, log };
+}
+
+const capabilityDetectors: Record<NonNullable<InitProjectOptions["projectType"]>, CapabilityDetector> = {
+  node: detectNodeChecks,
+  python: detectPythonChecks,
+};
+
+async function resolveChecks(projectRoot: string, options: InitProjectOptions): Promise<CapabilityDetectionResult> {
+  const explicitChecks = options.checks ?? [];
+  if (explicitChecks.length > 0) {
+    const checks = explicitChecks.map(parseCheckFlag);
+    return { checks, log: ["Using explicit --check flags; skipping capability detection."] };
+  }
+
+  if (!options.projectType) {
+    throw new Error("Specify --project-type <node|python> or provide --check to define deterministic checks.");
+  }
+
+  const detector = capabilityDetectors[options.projectType];
+  if (!detector) {
+    throw new Error(`Unsupported project type '${options.projectType}'.`);
+  }
+
+  return detector(projectRoot);
 }
 
 function buildInitArgs(params: {
@@ -151,6 +323,11 @@ export async function initProject(targetPath: string, options: InitProjectOption
   await mkdir(`${absPath}/.harness/logs`, { recursive: true });
   await mkdir(`${absPath}/.harness/worktrees`, { recursive: true });
 
+  const capability = await resolveChecks(absPath, options);
+  for (const entry of capability.log) {
+    log(entry);
+  }
+
   // 5. Write default harness config
   const configPath = `${absPath}/.harness/config.yaml`;
   if (!existsSync(configPath)) {
@@ -173,7 +350,7 @@ export async function initProject(targetPath: string, options: InitProjectOption
           fallbackRuntime: "codex",
           maxRetriesBeforeFallback: 2,
           mergeMode: "direct",
-          checks: [],
+          checks: capability.checks,
           worktreeSetup: ["[ -f package.json ] && npm install || true"],
           planner: { runtime: "claude-code", maxTurns: 20, maxBudgetUsd: 2 },
           coder: { runtime: "claude-code", maxTurns: 50, maxBudgetUsd: 5 },
