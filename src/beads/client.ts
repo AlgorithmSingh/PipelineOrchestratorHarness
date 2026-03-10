@@ -114,15 +114,19 @@ export function createBeadsClient(cwd: string): BeadsClient {
       return normalizeTicket(created);
     },
 
-    async claim(ticketId, agent) {
-      await runBd(["claim", ticketId, agent], `claim ${ticketId}`);
+    async claim(ticketId, _agent) {
+      await runBd(["update", ticketId, "--claim"], `claim ${ticketId}`);
     },
 
     async update(ticketId, updates) {
       const args = ["update", ticketId];
       if (updates.status) args.push("--status", updates.status);
       if (updates.body) args.push("--description", updates.body);
-      if (updates.labels) args.push("--labels", updates.labels.join(","));
+      if (updates.labels) {
+        for (const label of updates.labels) {
+          args.push("--add-label", label);
+        }
+      }
       await runBd(args, `update ${ticketId}`);
     },
 

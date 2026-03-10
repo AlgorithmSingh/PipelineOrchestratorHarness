@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import { loadConfig } from "./config.js";
+import { initProject } from "./commands/init.js";
 import { HarnessOrchestrator, type PipelineSelector } from "./orchestrator.js";
 import { createLogger } from "./util/logger.js";
 
@@ -10,7 +11,8 @@ const program = new Command();
 program
   .name("harness")
   .description("Pipeline Orchestrator Harness")
-  .version("0.1.0");
+  .version("0.1.0")
+  .option("--project <path>", "Target project directory (must have .beads/ initialized)", process.cwd());
 
 program
   .command("start")
@@ -18,7 +20,8 @@ program
   .option("--pipeline <name>", "Run only one pipeline (execution|plan|adversarial)")
   .option("--once", "Run only one polling cycle")
   .action(async (options: { pipeline?: string; once?: boolean }) => {
-    const config = await loadConfig(process.cwd());
+    const parentOpts = program.opts<{ project: string }>();
+    const config = await loadConfig(process.cwd(), parentOpts.project);
     const logger = createLogger();
     const selector = parsePipeline(options.pipeline);
     const orchestrator = new HarnessOrchestrator(config, logger);
@@ -42,7 +45,8 @@ program
   .command("status")
   .description("Show current config and enabled pipelines")
   .action(async () => {
-    const config = await loadConfig(process.cwd());
+    const parentOpts = program.opts<{ project: string }>();
+    const config = await loadConfig(process.cwd(), parentOpts.project);
     const payload = {
       project: config.project.name,
       root: config.project.root,
@@ -66,8 +70,31 @@ program
   .command("validate")
   .description("Validate harness configuration")
   .action(async () => {
-    await loadConfig(process.cwd());
+    const parentOpts = program.opts<{ project: string }>();
+    await loadConfig(process.cwd(), parentOpts.project);
     process.stdout.write("Config is valid.\n");
+  });
+
+program
+  .command("init")
+  .description("Initialize a new project with Beads, git, and harness config")
+  .argument("<path>", "Directory to initialize")
+  .option("--beads-prefix <prefix>", "Override Beads issue prefix (default: target directory name)")
+  .option("--beads-database <database>", "Use an existing Dolt server database for Beads init")
+  .option("--beads-server-host <host>", "Beads Dolt server host override")
+  .option("--beads-server-port <port>", "Beads Dolt server port override")
+  .action(async (path: string, options: {
+    beadsPrefix?: string;
+    beadsDatabase?: string;
+    beadsServerHost?: string;
+    beadsServerPort?: string;
+  }) => {
+    await initProject(path, {
+      beadsPrefix: options.beadsPrefix,
+      beadsDatabase: options.beadsDatabase,
+      beadsServerHost: options.beadsServerHost,
+      beadsServerPort: options.beadsServerPort ? Number(options.beadsServerPort) : undefined,
+    });
   });
 
 program

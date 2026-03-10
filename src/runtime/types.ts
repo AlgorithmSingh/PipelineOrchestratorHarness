@@ -8,7 +8,7 @@ export interface AgentResult {
     cacheReadTokens?: number;
     cacheWriteTokens?: number;
   };
-  exitReason: "completed" | "max_turns" | "max_budget" | "error";
+  exitReason: "completed" | "max_turns" | "max_budget" | "error" | "aborted";
   error?: string;
   durationMs: number;
 }
@@ -21,6 +21,9 @@ export interface AgentRuntimeConfig {
   outputSchema?: Record<string, unknown>;
   allowedTools?: string[];
   env?: Record<string, string>;
+  signal?: AbortSignal;
+  logger?: import("pino").Logger;
+  streamOutput?: boolean;
 }
 
 export interface AgentRuntime {

@@ -15,17 +15,33 @@ export const executionTransitions: StateTransition<ExecutionState>[] = [
   { from: "exec:claim", to: "exec:generate_contract", guard: () => true, action: pass },
   { from: "exec:generate_contract", to: "exec:execute_code", guard: () => true, action: pass },
   { from: "exec:execute_code", to: "exec:deterministic_checks", guard: () => true, action: pass },
-  { from: "exec:deterministic_checks", to: "exec:agent_review", guard: () => true, action: pass },
+  // Checks pass → reviewer; checks fail → cascade
+  { from: "exec:deterministic_checks", to: "exec:agent_review", guard: (ctx) => ctx.checksPassed !== false, action: pass },
+  { from: "exec:deterministic_checks", to: "exec:cascade_check", guard: (ctx) => ctx.checksPassed === false, action: pass },
+  // Reviewer pass → commit; reviewer fail → cascade
   { from: "exec:agent_review", to: "exec:commit", guard: (ctx) => ctx.agentResult?.passed === true, action: pass },
   { from: "exec:agent_review", to: "exec:cascade_check", guard: (ctx) => ctx.agentResult?.passed === false, action: pass },
-  { from: "exec:commit", to: "exec:merge", guard: () => true, action: pass },
+  // Commit → merge or PR
   { from: "exec:commit", to: "exec:create_pr", guard: (ctx) => ctx.mergeMode === "pr", action: pass },
+  { from: "exec:commit", to: "exec:merge", guard: (ctx) => ctx.mergeMode !== "pr", action: pass },
   { from: "exec:create_pr", to: "exec:merge", guard: () => true, action: pass },
-  { from: "exec:merge", to: "exec:close_ticket", guard: () => true, action: pass },
+  // Merge success → close; merge conflict → cascade
+  { from: "exec:merge", to: "exec:close_ticket", guard: (ctx) => ctx.mergeConflict !== true, action: pass },
+  { from: "exec:merge", to: "exec:cascade_check", guard: (ctx) => ctx.mergeConflict === true, action: pass },
   { from: "exec:close_ticket", to: "exec:completed", guard: () => true, action: pass },
-  { from: "exec:cascade_check", to: "exec:reinject", guard: (ctx) => Number(ctx.retryCount ?? 0) < 3, action: pass },
-  { from: "exec:cascade_check", to: "exec:hitl_gate", guard: (ctx) => Number(ctx.retryCount ?? 0) >= 3, action: pass },
+  // Cascade: retry if under limit, HITL if at limit
+  {
+    from: "exec:cascade_check", to: "exec:reinject",
+    guard: (ctx) => Number(ctx.retryCount ?? 0) < Number(ctx.maxRetries ?? 3),
+    action: pass,
+  },
+  {
+    from: "exec:cascade_check", to: "exec:hitl_gate",
+    guard: (ctx) => Number(ctx.retryCount ?? 0) >= Number(ctx.maxRetries ?? 3),
+    action: pass,
+  },
   { from: "exec:reinject", to: "exec:generate_contract", guard: () => true, action: pass },
+  // HITL decisions
   { from: "exec:hitl_gate", to: "exec:generate_contract", guard: (ctx) => ctx.humanInput === "edit" || ctx.humanInput === "approve", action: pass },
   { from: "exec:hitl_gate", to: "exec:failed", guard: (ctx) => ctx.humanInput === "abort" || ctx.humanInput === "reject", action: pass },
 ];

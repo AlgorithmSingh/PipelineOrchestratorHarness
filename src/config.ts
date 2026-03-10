@@ -25,7 +25,7 @@ export const DEFAULT_CONFIG: HarnessConfig = {
     },
     execution: {
       enabled: true,
-      maxParallelAgents: 3,
+      maxParallelAgents: 1,
       pollIntervalMs: 30_000,
       maxRetriesPerTicket: 3,
       runtime: "claude-code",
@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG: HarnessConfig = {
         { name: "TypeScript", command: "npm run typecheck" },
         { name: "Lint", command: "npm run lint" },
       ],
-      worktreeSetup: ["npm install"],
+      worktreeSetup: ["[ -f package.json ] && npm install || true"],
       planner: { runtime: "claude-code", maxTurns: 20, maxBudgetUsd: 2 },
       coder: { runtime: "claude-code", maxTurns: 50, maxBudgetUsd: 5 },
       reviewer: { runtime: "claude-code", maxTurns: 15, maxBudgetUsd: 1 },
@@ -112,18 +112,33 @@ function validateConfig(config: HarnessConfig, configPath: string): void {
   }
 }
 
-export async function loadConfig(projectRoot = process.cwd()): Promise<HarnessConfig> {
-  const absRoot = resolve(projectRoot);
+export async function loadConfig(harnessRoot = process.cwd(), targetProject?: string): Promise<HarnessConfig> {
+  const absRoot = resolve(harnessRoot);
   const configPath = join(absRoot, CONFIG_PATH);
   const localConfigPath = join(absRoot, CONFIG_LOCAL_PATH);
 
-  if (!existsSync(configPath)) {
+  // Check for project-local config first (created by `harness init`)
+  const projectConfigPath = targetProject ? join(resolve(targetProject), ".harness/config.yaml") : undefined;
+
+  if (!existsSync(configPath) && !(projectConfigPath && existsSync(projectConfigPath))) {
     throw new ConfigError(`Missing config file at ${configPath}`, { configPath });
   }
 
-  const raw = await readFile(configPath, "utf8");
-  const parsed = parse(raw) as unknown;
-  let merged = deepMerge(DEFAULT_CONFIG, parsed) as HarnessConfig;
+  let merged = DEFAULT_CONFIG;
+
+  // Load harness-level config if it exists
+  if (existsSync(configPath)) {
+    const raw = await readFile(configPath, "utf8");
+    const parsed = parse(raw) as unknown;
+    merged = deepMerge(merged, parsed) as HarnessConfig;
+  }
+
+  // Load project-local config (overrides harness config)
+  if (projectConfigPath && existsSync(projectConfigPath)) {
+    const projectRaw = await readFile(projectConfigPath, "utf8");
+    const projectParsed = parse(projectRaw) as unknown;
+    merged = deepMerge(merged, projectParsed) as HarnessConfig;
+  }
 
   if (existsSync(localConfigPath)) {
     const localRaw = await readFile(localConfigPath, "utf8");
@@ -131,12 +146,13 @@ export async function loadConfig(projectRoot = process.cwd()): Promise<HarnessCo
     merged = deepMerge(merged, localParsed) as HarnessConfig;
   }
 
+  const effectiveRoot = targetProject ? resolve(targetProject) : absRoot;
   merged = deepMerge(merged, {
     project: {
-      root: absRoot,
-      worktreeDir: resolve(absRoot, merged.project.worktreeDir),
-      stateDir: resolve(absRoot, merged.project.stateDir),
-      logDir: resolve(absRoot, merged.project.logDir),
+      root: effectiveRoot,
+      worktreeDir: resolve(effectiveRoot, merged.project.worktreeDir),
+      stateDir: resolve(effectiveRoot, merged.project.stateDir),
+      logDir: resolve(effectiveRoot, merged.project.logDir),
     },
   });
 

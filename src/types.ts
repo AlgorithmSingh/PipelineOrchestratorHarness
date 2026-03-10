@@ -40,6 +40,7 @@ export interface ExecutionConfig {
   planner: RoleRuntimeConfig;
   coder: RoleRuntimeConfig;
   reviewer: RoleRuntimeConfig;
+  streamAgentOutput?: boolean;
 }
 
 export interface AdversarialRoleConfig extends RoleRuntimeConfig {

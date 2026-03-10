@@ -9,6 +9,7 @@ export type PipelineSelector = "execution" | "plan" | "adversarial";
 
 export class HarnessOrchestrator {
   private running = false;
+  private abortController: AbortController | null = null;
   private readonly executionPipeline: ExecutionPipeline;
   private readonly planPipeline: PlanGenerationPipeline;
   private readonly adversarialPipeline: AdversarialPipeline;
@@ -22,10 +23,16 @@ export class HarnessOrchestrator {
     this.adversarialPipeline = new AdversarialPipeline(config, logger);
   }
 
+  get signal(): AbortSignal | undefined {
+    return this.abortController?.signal;
+  }
+
   async runOnce(selector?: PipelineSelector): Promise<void> {
+    const signal = this.abortController?.signal;
+
     if (!selector || selector === "execution") {
       if (this.config.pipelines.execution.enabled) {
-        await this.executionPipeline.runOnce();
+        await this.executionPipeline.runOnce(signal);
       }
     }
 
@@ -44,16 +51,19 @@ export class HarnessOrchestrator {
 
   async start(selector?: PipelineSelector): Promise<void> {
     this.running = true;
+    this.abortController = new AbortController();
     this.logger.info({ pipeline: "harness", event: "start", selector }, "harness orchestrator started");
 
     while (this.running) {
       await this.runOnce(selector);
+      if (!this.running) break;
       await sleep(this.pollInterval(selector));
     }
   }
 
   stop(): void {
     this.running = false;
+    this.abortController?.abort();
     this.logger.info({ pipeline: "harness", event: "stop" }, "harness orchestrator stopping");
   }
 

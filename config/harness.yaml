@@ -14,7 +14,7 @@ pipelines:
 
   execution:
     enabled: true
-    maxParallelAgents: 3
+    maxParallelAgents: 1
     pollIntervalMs: 30000
     maxRetriesPerTicket: 3
     runtime: "claude-code"
@@ -27,7 +27,7 @@ pipelines:
       - name: "Lint"
         command: "npm run lint"
     worktreeSetup:
-      - "npm install"
+      - "[ -f package.json ] && npm install || true"
     planner:
       runtime: "claude-code"
       maxTurns: 20
@@ -40,6 +40,7 @@ pipelines:
       runtime: "claude-code"
       maxTurns: 15
       maxBudgetUsd: 1
+    streamAgentOutput: true
 
   adversarial:
     enabled: false
