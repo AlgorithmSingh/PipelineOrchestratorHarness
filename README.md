@@ -67,6 +67,29 @@ For each ticket, the harness:
 
 If checks fail or merge conflicts occur, the ticket is reopened. Errors are logged and worktrees are cleaned up.
 
+## Prompt Artifacts
+
+Execution prompt capture is always on for planner, coder, and reviewer stages.
+
+- Location: `.harness/prompts/<ticketId>/`
+- Filename pattern: `<sequence>-attempt<attempt>-<stage>.json`
+- Stages: `planner`, `coder`, `reviewer`
+
+Each prompt artifact JSON contains:
+
+- `ticketId`
+- `stage`
+- `attempt`
+- `sequence`
+- `runtime`
+- `maxTurns`
+- `maxBudgetUsd`
+- `createdAt`
+- `promptHashSha256`
+- `prompt`
+
+This data is local to the target project and is not pruned by default.
+
 ## Configuration
 
 Config lives in `config/harness.yaml`. Override locally with `config/harness.local.yaml`.
@@ -208,12 +231,6 @@ npx harness init /path/to/project     # sets up everything
 # create tickets with bd
 npx harness start --project /path/to/project --pipeline execution
 
-npx harness init /Users/ankitsingh/Documents/dev/HARNESS/todolist9
-npx harness start --project /Users/ankitsingh/Documents/dev/HARNESS/todolist9 --pipeline execution
-npx harness init /Users/ankitsingh/Documents/dev/HARNESS/todolist11 \
-  --check "Typecheck=npm run typecheck" \
-  --check "Lint=npm run lint" \
-  --check "Tests=npm test"
 
 ### UI Modes
 
@@ -245,3 +262,24 @@ LOG_LEVEL=debug npx harness start --project /Users/ankitsingh/Documents/dev/HARN
 ## NEXT STEPS 
 -> FUNCTIONALITY DEPENDING ON TYPE OF PROJECT. So it can catch mistakes claude code makes. it is not just going to make typescript project, it could also make python project. Maybe ask user what type of project you want and then make rules based on that. 
 -> ALSO I want it to beautiully show how much of the pipeline is pending. Is that possible?
+--> Program the Codex SDK and claude code sdk.
+--> Can you think of a more user Friendly CLI? THINK OF THIS VISION -> I should be able to look at my cli logs and be able to understand where it is in the list of tickets I gave it. I SHOULD BE ABLE TO GRASP - HEY I GAVE IT THE WRONG TICKET, HEY THIS TICKET WAS RIGHT. HEY I DONT LIKE THIS IMPLEMENTATION, LET'S MAKE IT RE-DO IT. WE WILL GET TO THAT VISION IN TIME BUT ATLEAST LET'S get started.
+
+
+### COMMANDS
+npx npm run build
+
+npx harness init /Users/ankitsingh/Documents/dev/HARNESS/todolist14 \
+  --check "Typecheck=npm run typecheck" \
+  --check "Lint=npm run lint" \
+  --check "Tests=npm test"
+
+npx harness start --project /Users/ankitsingh/Documents/dev/HARNESS/todolist14 --pipeline execution
+
+```bash
+npm run dev -- <command>     # run with tsx (no build)
+npm run build                # compile to dist/
+npm run typecheck            # type-check without emit
+npm test                     # run vitest
+npm run lint                 # biome lint
+```
